@@ -365,6 +365,237 @@ class iDOMAIN_NET(iIMAGENET_R):
         self.data = data_config['data']
         self.targets = data_config['targets']
 
+# -------------------------
+# iFiveDatasets (5dataset)
+# -------------------------
+class iFiveDatasets(iDataset):
+    """
+    5-datasets continual learning benchmark as a single iDataset-compatible class.
+
+    Datasets (default order): ["cifar10", "mnist", "svhn_cropped", "not_mnist", "fashion_mnist"]
+    - Each dataset is treated as one task of 10 classes.
+    - Global labels are offset per task: task i -> labels [i*10 .. i*10+9].
+    - All images are converted to 32x32 RGB and stored as uint8 HWC arrays.
+
+    Extra args:
+      - dataset_list: list[str] subset/reorder of the 5 datasets above.
+      - subsample_rate: int percentage (1..100) to keep from each dataset split.
+      - try_tfds_for_notmnist: if True, will use TensorFlow Datasets to load notMNIST if available.
+
+    Use exactly like iCIFAR10/iCIFAR100:
+      ds = iFiveDatasets(root="~/data", train=True, transform=tr, download_flag=True)
+      ds.load_dataset(t=0, train=True)   # task 0 (e.g., CIFAR-10 by default)
+      img, y, t = ds[0]
+    """
+    im_size = 32
+    nch = 3
+
+    _DEFAULT_LIST = ["cifar10", "mnist", "svhn_cropped", "not_mnist", "fashion_mnist"]
+
+    def __init__(self,
+                 root,
+                 train=True,
+                 transform=None,
+                 download_flag=False,
+                 lab=True,
+                 swap_dset=None,
+                 tasks=None,
+                 seed=-1,
+                 rand_split=False,
+                 validation=False,
+                 kfolds=5,
+                 dataset_list=None,
+                 subsample_rate=-1,
+                 try_tfds_for_notmnist=True):
+
+        # Stash our extra config so self.load() can see them during super().__init__()
+        self.dataset_list = dataset_list if dataset_list is not None else list(self._DEFAULT_LIST)
+        self.subsample_rate = int(subsample_rate) if subsample_rate is not None else -1
+        self.try_tfds_for_notmnist = bool(try_tfds_for_notmnist)
+
+        # If tasks not provided, default to 10 labels per task in order
+        if tasks is None:
+            tasks = [list(range(i * 10, (i + 1) * 10)) for i in range(len(self.dataset_list))]
+
+        super().__init__(root=root,
+                         train=train,
+                         transform=transform,
+                         download_flag=download_flag,
+                         lab=lab,
+                         swap_dset=swap_dset,
+                         tasks=tasks,
+                         seed=seed,
+                         rand_split=rand_split,
+                         validation=validation,
+                         kfolds=kfolds)
+
+    # -------------------------
+    # Dataset loader (override)
+    # -------------------------
+    def load(self):
+        all_imgs = []
+        all_labels = []
+
+        for i, name in enumerate(self.dataset_list):
+            offset = i * 10
+            imgs_i, labels_i = self._load_single_dataset(name=name,
+                                                         train=self.train or self.validation,
+                                                         download=self.download_flag)
+            # optional subsampling (percentage)
+            if self.subsample_rate and self.subsample_rate > 0:
+                n_keep = max(1, int(len(labels_i) * self.subsample_rate / 100.0))
+                imgs_i, labels_i = imgs_i[:n_keep], labels_i[:n_keep]
+
+            # label offset
+            labels_i = labels_i + offset
+
+            all_imgs.append(imgs_i)
+            all_labels.append(labels_i)
+
+        if len(all_imgs) == 0:
+            raise RuntimeError("No datasets loaded. Check dataset_list.")
+
+        self.data = np.concatenate(all_imgs, axis=0).astype(np.uint8)
+        self.targets = np.concatenate(all_labels, axis=0).astype(np.int64)
+
+    # -------------------------
+    # Helpers
+    # -------------------------
+    def _load_single_dataset(self, name, train, download):
+        """
+        Returns:
+          imgs: np.ndarray [N, 32, 32, 3] uint8
+          labels: np.ndarray [N] int64, original per-dataset labels in [0..9]
+        """
+        name = name.lower()
+        if name == "cifar10":
+            return self._load_cifar10(train, download)
+        elif name == "mnist":
+            return self._load_mnist_like(kind="mnist", train=train, download=download)
+        elif name == "fashion_mnist":
+            return self._load_mnist_like(kind="fashion_mnist", train=train, download=download)
+        elif name == "svhn_cropped":
+            return self._load_svhn(train, download)
+        elif name == "not_mnist":
+            return self._load_not_mnist(train, download)
+        else:
+            raise ValueError(f"Unknown dataset '{name}'. Valid options: {self._DEFAULT_LIST}")
+
+    @staticmethod
+    def _ensure_rgb32(arr):
+        """
+        Accepts:
+          - CIFAR-like HWC RGB uint8
+          - MNIST-like HW uint8
+        Returns HWC uint8 RGB 32x32
+        """
+        # To PIL
+        if arr.ndim == 2:  # HW grayscale
+            img = Image.fromarray(arr, mode="L").convert("RGB")
+        elif arr.ndim == 3:
+            if arr.shape[2] == 1:
+                img = Image.fromarray(arr.squeeze(-1), mode="L").convert("RGB")
+            else:
+                img = Image.fromarray(arr, mode="RGB")
+        else:
+            raise ValueError(f"Unexpected image shape: {arr.shape}")
+
+        if img.size != (32, 32):
+            img = img.resize((32, 32), resample=Image.BILINEAR)
+        return np.array(img, dtype=np.uint8)  # HWC RGB
+
+    def _load_cifar10(self, train, download):
+        ds = datasets.CIFAR10(root=self.root, train=train, download=download)
+        # ds.data: (N, 32, 32, 3), ds.targets: list[int 0..9]
+        imgs = ds.data
+        labels = np.array(ds.targets, dtype=np.int64)
+        # Already 32x32 RGB
+        return imgs, labels
+
+    def _load_mnist_like(self, kind, train, download):
+        if kind == "mnist":
+            ds = datasets.MNIST(root=self.root, train=train, download=download)
+        elif kind == "fashion_mnist":
+            ds = datasets.FashionMNIST(root=self.root, train=train, download=download)
+        else:
+            raise ValueError(kind)
+        # ds.data: (N, H, W) uint8; ds.targets: tensor/list
+        imgs = ds.data.numpy() if hasattr(ds.data, "numpy") else np.array(ds.data)
+        labels = ds.targets.numpy() if hasattr(ds.targets, "numpy") else np.array(ds.targets)
+        # Convert each to 32x32 RGB
+        imgs = np.stack([self._ensure_rgb32(im) for im in imgs], axis=0)
+        labels = labels.astype(np.int64)
+        # MNIST/FashionMNIST labels are naturally 0..9
+        return imgs, labels
+
+    def _load_svhn(self, train, download):
+        split = "train" if train else "test"
+        ds = datasets.SVHN(root=self.root, split=split, download=True)
+        # ds.data: (N, 3, 32, 32) uint8 (CHW) in torchvision!
+        # Convert to HWC
+        imgs = np.transpose(ds.data, (0, 2, 3, 1)).astype(np.uint8)
+        labels = np.array(ds.labels, dtype=np.int64)
+        # SVHN labels are 1..10 with '10' meaning digit '0' in some versions.
+        # torchvision's SVHN returns labels 0..9 already; if any 10s present, map to 0.
+        if labels.max() == 10:
+            labels = np.where(labels == 10, 0, labels)
+        return imgs, labels
+
+    def _load_not_mnist(self, train, download):
+        import zipfile
+        url = 'https://github.com/facebookresearch/Adversarial-Continual-Learning/raw/main/data/notMNIST.zip'
+        filename = 'notMNIST.zip'
+        zip_path = os.path.join(self.root, filename)
+        base_dir = os.path.join(self.root, 'notMNIST')
+        split_dir = os.path.join(base_dir, 'Train' if (train or self.validation) else 'Test')
+
+        # Download if requested
+        if download and not os.path.isfile(zip_path) and not os.path.isdir(base_dir):
+            download_url(url, self.root, filename, md5=None)
+
+        # Extract only if not already extracted
+        if not os.path.isdir(base_dir):
+            if not os.path.isfile(zip_path):
+                raise RuntimeError("notMNIST zip not found. Use download_flag=True or place the zip/folder under root.")
+            with zipfile.ZipFile(zip_path, 'r') as z:
+                z.extractall(self.root)
+
+        if not os.path.isdir(split_dir):
+            raise RuntimeError(f"notMNIST split directory missing: {split_dir}")
+
+        # Collect images deterministically
+        classes = [d for d in sorted(os.listdir(split_dir))
+                if os.path.isdir(os.path.join(split_dir, d))]
+        # Keep only single-letter classes (A..J)
+        classes = [c for c in classes if len(c) == 1 and c.isalpha()]
+        class_to_idx = {c: i for i, c in enumerate(sorted(classes))}
+
+        imgs_list, labels_list = [], []
+        for c in sorted(classes):
+            cdir = os.path.join(split_dir, c)
+            for fname in sorted(os.listdir(cdir)):
+                fpath = os.path.join(cdir, fname)
+                if not os.path.isfile(fpath):
+                    continue
+                try:
+                    with Image.open(fpath) as im:
+                        im = im.convert('RGB')
+                        if im.size != (32, 32):
+                            im = im.resize((32, 32), resample=Image.BILINEAR)
+                        imgs_list.append(np.array(im, dtype=np.uint8))
+                        labels_list.append(class_to_idx[c])
+                except Exception:
+                    # broken/corrupt file – skip
+                    continue
+
+        if len(imgs_list) == 0:
+            raise RuntimeError(f"No images found in {split_dir}.")
+
+        imgs = np.stack(imgs_list, axis=0)
+        labels = np.array(labels_list, dtype=np.int64)
+        return imgs, labels
+
+        
 def jpg_image_to_array(image_path):
     """
     Loads JPEG image into 3D Numpy array of shape 

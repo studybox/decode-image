@@ -12,6 +12,7 @@ import contextlib
 import os
 import copy
 from utils.schedulers import CosineSchedule
+from tqdm.auto import tqdm 
 
 class NormalNN(nn.Module):
     '''
@@ -89,14 +90,25 @@ class NormalNN(nn.Module):
             acc = AverageMeter()
             batch_time = AverageMeter()
             batch_timer = Timer()
+            num_epochs = self.config['schedule'][-1]
             for epoch in range(self.config['schedule'][-1]):
                 self.epoch=epoch
 
                 if epoch > 0: self.scheduler.step()
                 for param_group in self.optimizer.param_groups:
                     self.log('LR:', param_group['lr'])
+                curr_lr = self.optimizer.param_groups[0]['lr']
                 batch_timer.tic()
-                for i, (x, y, task)  in enumerate(train_loader):
+                # progress bar over the loader
+                pbar = tqdm(
+                    enumerate(train_loader),
+                    total=len(train_loader),
+                    desc=f"Epoch {epoch+1}/{num_epochs} | LR {curr_lr:.3e}",
+                    leave=False,
+                    dynamic_ncols=True,
+                )
+
+                for i, (x, y, task) in pbar:
 
                     # verify in train mode
                     self.model.train()

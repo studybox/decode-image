@@ -47,6 +47,16 @@ class Trainer:
             num_classes = 345
             self.dataset_size = [224,224,3]
             self.top_k = 1
+        elif args.dataset == 'FiveDatasets':
+            Dataset = dataloaders.iFiveDatasets
+            # Allow override/order via CLI; else default inside the dataset class
+            self.dataset_list = getattr(
+                args, 'dataset_list',
+                ["cifar10", "mnist", "svhn_cropped", "not_mnist", "fashion_mnist"]
+            )
+            num_classes = 10 * len(self.dataset_list)
+            self.dataset_size = [32, 32, 3]
+            self.top_k = 1
         else:
             raise ValueError('Dataset not implemented!')
 
@@ -89,8 +99,12 @@ class Trainer:
             resize_imnet = True
         else:
             resize_imnet = False
-        train_transform = dataloaders.utils.get_transform(dataset=args.dataset, phase='train', aug=args.train_aug, resize_imnet=resize_imnet)
-        test_transform  = dataloaders.utils.get_transform(dataset=args.dataset, phase='test', aug=args.train_aug, resize_imnet=resize_imnet)
+        if args.dataset == 'FiveDatasets':
+            _tf_name = 'CIFAR100'   # force CIFAR-like transforms (32x32 RGB)
+        else:
+            _tf_name = args.dataset
+        train_transform = dataloaders.utils.get_transform(dataset=_tf_name, phase='train', aug=args.train_aug, resize_imnet=resize_imnet)
+        test_transform  = dataloaders.utils.get_transform(dataset=_tf_name, phase='test', aug=args.train_aug, resize_imnet=resize_imnet)
         self.train_dataset = Dataset(args.dataroot, train=True, lab = True, tasks=self.tasks,
                             download_flag=True, transform=train_transform, 
                             seed=self.seed, rand_split=args.rand_split, validation=args.validation)
@@ -123,7 +137,8 @@ class Trainer:
                         'upper_bound_flag': args.upper_bound_flag,
                         'tasks': self.tasks_logits,
                         'top_k': self.top_k,
-                        'prompt_param':[self.num_tasks,args.prompt_param]
+                        'prompt_param':[self.num_tasks,args.prompt_param],
+                        'hyper_param':[self.num_tasks,args.hyper_param],
                         }
         self.learner_type, self.learner_name = args.learner_type, args.learner_name
         self.learner = learners.__dict__[self.learner_type].__dict__[self.learner_name](self.learner_config)
@@ -132,7 +147,11 @@ class Trainer:
 
         val_name = self.task_names[t_index]
         print('validation split name:', val_name)
-        
+        #TODO temporary for test
+        # try:
+        #     self.learner.model.module.task_id = t_index
+        # except:
+        #     self.learner.model.task_id = t_index
         # eval
         self.test_dataset.load_dataset(t_index, train=True)
         test_loader  = DataLoader(self.test_dataset, batch_size=self.batch_size, shuffle=False, drop_last=False, num_workers=self.workers)

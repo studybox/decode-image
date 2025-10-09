@@ -17,7 +17,7 @@ from utils.schedulers import CosineSchedule
 from torch.autograd import Variable, Function
 from .optim_step import calc_delta_theta
 from .loss import ContinualLearningLoss
-
+from tqdm import tqdm
 
 class Decode(nn.Module):
 
@@ -156,6 +156,7 @@ class Decode(nn.Module):
             bpds = AverageMeter()
             batch_time = AverageMeter()
             batch_timer = Timer()
+            num_epochs = self.config['schedule'][-1]
             for epoch in range(self.config['schedule'][-1]):
                 self.epoch=epoch
 
@@ -166,7 +167,17 @@ class Decode(nn.Module):
                 for param_group in self.theta_optimizer.param_groups:
                     self.log('LR:', param_group['lr'])
                 batch_timer.tic()
-                for i, (x, y, task)  in enumerate(train_loader):
+                # progress bar over the loader
+                curr_lr = self.theta_optimizer.param_groups[0]['lr']
+                pbar = tqdm(
+                    enumerate(train_loader),
+                    total=len(train_loader),
+                    desc=f"Epoch {epoch+1}/{num_epochs} | LR {curr_lr:.3e}",
+                    leave=False,
+                    dynamic_ncols=True,
+                )
+
+                for i, (x, y, task) in pbar:
 
                     # verify in train mode
                     self.model.train()

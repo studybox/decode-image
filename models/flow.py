@@ -111,7 +111,15 @@ class NormalizingFlow(nn.Module):
         # Mahalanobis distance in this context reduces to the Euclidean distance
         distance = torch.sqrt(torch.sum(z**2, dim=1))
         return distance
-            
+
+    def predict_log_prob(self, x):
+        z, ldj = self.encode(x)
+        log_pz = self.prior.log_prob(z).sum(dim=-1)
+        log_px = log_pz + ldj
+        nll = -log_px
+        bpd = nll * np.log2(np.e) / np.prod(x.shape[1:])
+        return log_px, bpd.mean()
+                
     # def configure_optimizers(self):
     #     optimizer = optim.Adam(self.parameters(), lr=self.configs.train.lr)
     #     # An scheduler is optional, but can help in flows to get the last bpd improvement

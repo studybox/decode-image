@@ -25,6 +25,6 @@ mkdir -p $OUTDIR
 #    arg 2 = prompt length
 #    arg 3 = ortho penalty loss weight - with updated code, now can be 0!
 python -u run.py --config $CONFIG --gpuid $GPUID --repeat $REPEAT --overwrite $OVERWRITE \
-    --learner_type decode --learner_name Decode \
+    --learner_type decode2 --learner_name Decode \
     --hyper_param 128 128 \
-    --log_dir ${OUTDIR}/decode
+    --log_dir ${OUTDIR}/decode_bayesian
